@@ -45,7 +45,8 @@ class FrozenInTime(BaseModel):
             if arch_config == 'base_patch16_224':
                 # you can download the checkpoint via wget https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-vitjx/jx_vit_base_p16_224-80ecf9dd.pth
                 # vit_model = timm.models.vision_transformer.vit_base_patch16_224(pretrained=pretrained)
-                vit_model = torch.load("pretrained/jx_vit_base_p16_224-80ecf9dd.pth", map_location="cpu")
+                if load_checkpoint in ["", None]:
+                    vit_model = torch.load("pretrained/jx_vit_base_p16_224-80ecf9dd.pth", map_location="cpu")
                 model = SpaceTimeTransformer(num_frames=num_frames,
                                             time_init=time_init,
                                             attention_style=attention_style)
@@ -85,14 +86,15 @@ class FrozenInTime(BaseModel):
         self.txt_proj = txt_proj
         self.vid_proj = vid_proj
 
-        if load_checkpoint not in ["", None]:
-            # checkpoint = torch.load(load_checkpoint)
-            local_rank = int(os.environ['LOCAL_RANK'])  # fixed by qinghong.
-            checkpoint = torch.load(load_checkpoint, map_location='cuda:{}'.format(local_rank))
-            state_dict = checkpoint['state_dict']
-            new_state_dict = state_dict_data_parallel_fix(state_dict, self.state_dict())
-            new_state_dict = self._inflate_positional_embeds(new_state_dict)
-            self.load_state_dict(new_state_dict, strict=True)
+        # Commented out: load checkpoint externally instead
+        # if load_checkpoint not in ["", None]:
+        #     # checkpoint = torch.load(load_checkpoint)
+        #     local_rank = int(os.environ.get('LOCAL_RANK', 0))  # Default to 0 for single GPU/CPU
+        #     checkpoint = torch.load(load_checkpoint, map_location='cuda:{}'.format(local_rank) if torch.cuda.is_available() else 'cpu')
+        #     state_dict = checkpoint['state_dict']
+        #     new_state_dict = state_dict_data_parallel_fix(state_dict, self.state_dict())
+        #     new_state_dict = self._inflate_positional_embeds(new_state_dict)
+        #     self.load_state_dict(new_state_dict, strict=True)
 
     def set_device(self, device):
         self.device = device
