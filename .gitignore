@@ -1,1 +1,5 @@
-pretrained/*.pth
+pretrained/*
+*/__pycache__/*
+__pycache__/*
+visual_features/*
+outputs/*
