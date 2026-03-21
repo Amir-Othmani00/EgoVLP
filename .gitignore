@@ -3,3 +3,4 @@ pretrained/*
 __pycache__/*
 visual_features/*
 outputs/*
+annotations/*
