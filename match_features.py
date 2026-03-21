@@ -112,6 +112,27 @@ def main(args):
     
     print(f"Loaded {len(task_data)} tasks")
     
+    # Load visual features metadata to get recording IDs
+    print("\nLoading visual features metadata...")
+    if args.visual_metadata:
+        visual_metadata_path = Path(args.visual_metadata)
+    else:
+        visual_metadata_path = Path(args.visual_features).parent / 'visual_features_mapping.json'
+
+    if visual_metadata_path.exists():
+        with open(visual_metadata_path, 'r') as f:
+            visual_metadata = json.load(f)
+    else:
+        print(f"⚠ Warning: Visual metadata not found at {visual_metadata_path}")
+        visual_metadata = {}
+    
+    # Check if step-level metadata is available
+    has_step_metadata = 'task_step_metadata' in visual_metadata
+    if has_step_metadata:
+        print("✓ Step-level metadata found (includes recording IDs)")
+    else:
+        print("⚠ Warning: No step-level metadata found. Recording IDs will not be included.")
+    
     print("\n" + "=" * 80)
     print("Performing Hungarian matching...")
     print("=" * 80)
@@ -124,11 +145,51 @@ def main(args):
         visual_emb = data['visual_embeddings']
         
         print(f"\nTask: {task_name}")
-        print(f"  Task nodes: {len(task_emb)}, Visual steps: {len(visual_emb)}")
         
-        matches, unmatched_task, unmatched_visual, similarity = hungarian_matching(
-            task_emb, visual_emb, metric=args.matching_metric
-        )
+        # Get step metadata for this task to see if we can group by recording
+        step_metadata_list = visual_metadata.get('task_step_metadata', {}).get(task_name, [])
+        
+        if has_step_metadata and len(step_metadata_list) == len(visual_emb):
+            # Group visual embeddings by recording_id
+            recordings = {}
+            for i, meta in enumerate(step_metadata_list):
+                rec_id = meta.get('recording_id', 'unknown')
+                if rec_id not in recordings:
+                    recordings[rec_id] = []
+                recordings[rec_id].append(i)
+                
+            task_matches = []
+            task_unmatched_task = []
+            task_unmatched_visual = []
+            similarity_matrix = compute_similarity_matrix(task_emb, visual_emb, metric=args.matching_metric)
+            
+            print(f"  Task nodes: {len(task_emb)}, Visual steps: {len(visual_emb)} across {len(recordings)} recordings")
+            
+            for rec_id, indices in recordings.items():
+                rec_visual_emb = visual_emb[indices]
+                matches, unmatched_t, unmatched_v, sim = hungarian_matching(
+                    task_emb, rec_visual_emb, metric=args.matching_metric
+                )
+                
+                # Convert back to global visual indices
+                global_matches = [(t, indices[v]) for t, v in matches]
+                global_unmatched_v = [indices[v] for v in unmatched_v]
+                
+                task_matches.extend(global_matches)
+                task_unmatched_task.extend(unmatched_t)
+                task_unmatched_visual.extend(global_unmatched_v)
+            
+            # For simplicity, just use the global similarity matrix for the whole task
+            matches = task_matches
+            unmatched_task = list(set(task_unmatched_task))
+            unmatched_visual = task_unmatched_visual
+            similarity = similarity_matrix
+        else:
+            print(f"  Task nodes: {len(task_emb)}, Visual steps: {len(visual_emb)}")
+            
+            matches, unmatched_task, unmatched_visual, similarity = hungarian_matching(
+                task_emb, visual_emb, metric=args.matching_metric
+            )
         
         print(f"  Matched pairs: {len(matches)}")
         print(f"  Unmatched task nodes: {len(unmatched_task)}")
@@ -148,9 +209,12 @@ def main(args):
             'similarity_matrix': similarity.tolist()  # Convert to list for JSON serialization
         }
         
+        # Get step metadata for this task
+        step_metadata_list = visual_metadata.get('task_step_metadata', {}).get(task_name, [])
+        
         # Create matched pairs for downstream training
         for task_idx, visual_idx in matches:
-            matched_pairs.append({
+            pair = {
                 'task_embedding': task_emb[task_idx].tolist(),
                 'visual_embedding': visual_emb[visual_idx].tolist(),
                 'task_name': task_name,
@@ -158,7 +222,17 @@ def main(args):
                 'visual_idx': int(visual_idx),
                 'similarity': float(similarity[task_idx, visual_idx]),
                 'description': data['descriptions'][task_idx] if task_idx < len(data['descriptions']) else 'N/A'
-            })
+            }
+            
+            # Add recording metadata if available
+            if has_step_metadata and visual_idx < len(step_metadata_list):
+                step_meta = step_metadata_list[visual_idx]
+                pair['recording_id'] = step_meta.get('recording_id', 'unknown')
+                pair['video_label'] = step_meta.get('label', -1)
+                pair['video_idx'] = step_meta.get('video_idx', -1)
+                pair['step_idx_in_video'] = step_meta.get('step_idx_in_video', -1)
+            
+            matched_pairs.append(pair)
     
     print(f"\n" + "=" * 80)
     print(f"Total matched pairs across all tasks: {len(matched_pairs)}")
@@ -212,6 +286,9 @@ if __name__ == '__main__':
     parser.add_argument('--visual_features', type=str,
                         default='visual_features/hiero_step_embeddings_256.npz',
                         help='Path to visual features')
+    parser.add_argument('--visual_metadata', type=str,
+                        default='',
+                        help='Path to visual features metadata JSON (optional)')
     parser.add_argument('--metadata', type=str,
                         default='outputs/task_graph_encodings/task_graph_metadata.json',
                         help='Path to task graph metadata')
