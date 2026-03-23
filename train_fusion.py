@@ -11,41 +11,69 @@ from torch.utils.data import Dataset, DataLoader
 
 class FeatureFusionModule(nn.Module):
     """
-    Dual-Encoder to independently project Task Graphs and Visual features into a shared cross-modal space.
+    Learnable projection to fuse task graph and visual features.
     """
     def __init__(self, embedding_dim=256, hidden_dim=512, output_dim=256, fusion_type='concat'):
         super().__init__()
         self.fusion_type = fusion_type
         self.embedding_dim = embedding_dim
         
-        # Dual Encoder (Two independent MLP branches)
-        self.task_proj = nn.Sequential(
-            nn.Linear(embedding_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(hidden_dim, output_dim),
-            nn.LayerNorm(output_dim)
-        )
-        
-        self.visual_proj = nn.Sequential(
-            nn.Linear(embedding_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(hidden_dim, output_dim),
-            nn.LayerNorm(output_dim)
-        )
-        
-        # Learnable temperature scalar for contrastive loss
-        import numpy as np
-        self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
-
+        if fusion_type == 'concat':
+            # Concatenate and project
+            self.fusion = nn.Sequential(
+                nn.Linear(embedding_dim * 2, hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(0.1),
+                nn.Linear(hidden_dim, output_dim),
+                nn.LayerNorm(output_dim)
+            )
+        elif fusion_type == 'cross_attention':
+            # Cross-attention mechanism
+            self.query_proj = nn.Linear(embedding_dim, embedding_dim)
+            self.key_proj = nn.Linear(embedding_dim, embedding_dim)
+            self.value_proj = nn.Linear(embedding_dim, embedding_dim)
+            self.out_proj = nn.Linear(embedding_dim, output_dim)
+            self.norm = nn.LayerNorm(output_dim)
+        elif fusion_type == 'gated':
+            # Gated fusion
+            self.gate = nn.Sequential(
+                nn.Linear(embedding_dim * 2, embedding_dim),
+                nn.Sigmoid()
+            )
+            self.proj = nn.Linear(embedding_dim, output_dim)
+            self.norm = nn.LayerNorm(output_dim)
+        else:
+            raise ValueError(f"Unknown fusion type: {fusion_type}")
+    
     def forward(self, task_features, visual_features):
         """
-        Returns the independently projected features.
+        Args:
+            task_features: (batch, embedding_dim)
+            visual_features: (batch, embedding_dim)
+        Returns:
+            fused_features: (batch, output_dim)
         """
-        task_fused = self.task_proj(task_features)
-        visual_fused = self.visual_proj(visual_features)
-        return task_fused, visual_fused
+        if self.fusion_type == 'concat':
+            combined = torch.cat([task_features, visual_features], dim=-1)
+            fused = self.fusion(combined)
+        elif self.fusion_type == 'cross_attention':
+            # Task features attend to visual features
+            Q = self.query_proj(task_features)
+            K = self.key_proj(visual_features)
+            V = self.value_proj(visual_features)
+            
+            # Scaled dot-product attention
+            attn_weights = torch.softmax(Q @ K.T / np.sqrt(self.embedding_dim), dim=-1)
+            attended = attn_weights @ V
+            fused = self.norm(self.out_proj(attended))
+        elif self.fusion_type == 'gated':
+            # Gated combination
+            gate_input = torch.cat([task_features, visual_features], dim=-1)
+            gate = self.gate(gate_input)
+            combined = gate * task_features + (1 - gate) * visual_features
+            fused = self.norm(self.proj(combined))
+        
+        return fused
 
 
 class MatchedPairsDataset(Dataset):
@@ -76,27 +104,23 @@ class MatchedPairsDataset(Dataset):
         }
 
 
-def contrastive_loss(task_fused, visual_fused, logit_scale):
+def contrastive_loss(fused_features, task_features, visual_features, temperature=0.07):
     """
-    Standard InfoNCE loss across the batch. 
-    Matches the task embeddings to visual embeddings in a true Dual-Encoder setup.
+    Contrastive loss to ensure fused features are similar to both inputs.
     """
-    task_fused = nn.functional.normalize(task_fused, dim=-1)
-    visual_fused = nn.functional.normalize(visual_fused, dim=-1)
+    # Normalize features
+    fused_norm = nn.functional.normalize(fused_features, dim=-1)
+    task_norm = nn.functional.normalize(task_features, dim=-1)
+    visual_norm = nn.functional.normalize(visual_features, dim=-1)
     
-    # Cosine similarity as logits
-    logit_scale = torch.clamp(logit_scale.exp(), max=100)
-    logits_per_task = logit_scale * task_fused @ visual_fused.t()
-    logits_per_visual = logits_per_task.t()
+    # Compute similarities
+    sim_task = (fused_norm * task_norm).sum(dim=-1) / temperature
+    sim_visual = (fused_norm * visual_norm).sum(dim=-1) / temperature
     
-    # Labels are just the diagonal (matching indices in the batch)
-    device = task_fused.device
-    labels = torch.arange(len(task_fused), dtype=torch.long, device=device)
+    # Loss: maximize similarity to both inputs
+    loss = -torch.mean(sim_task + sim_visual)
     
-    loss_t = nn.functional.cross_entropy(logits_per_task, labels)
-    loss_v = nn.functional.cross_entropy(logits_per_visual, labels)
-    
-    return (loss_t + loss_v) / 2
+    return loss
 
 
 def train_epoch(model, train_loader, optimizer, device, temperature):
@@ -111,10 +135,10 @@ def train_epoch(model, train_loader, optimizer, device, temperature):
         optimizer.zero_grad()
         
         # Forward pass
-        task_fused, visual_fused = model(task_emb, visual_emb)
+        fused = model(task_emb, visual_emb)
         
         # Compute loss
-        loss = contrastive_loss(task_fused, visual_fused, model.logit_scale)
+        loss = contrastive_loss(fused, task_emb, visual_emb, temperature=temperature)
         
         # Backward pass
         loss.backward()
@@ -135,8 +159,8 @@ def validate(model, val_loader, device, temperature):
             task_emb = batch['task_embedding'].to(device)
             visual_emb = batch['visual_embedding'].to(device)
             
-            task_fused, visual_fused = model(task_emb, visual_emb)
-            loss = contrastive_loss(task_fused, visual_fused, model.logit_scale)
+            fused = model(task_emb, visual_emb)
+            loss = contrastive_loss(fused, task_emb, visual_emb, temperature=temperature)
             
             total_loss += loss.item()
     
