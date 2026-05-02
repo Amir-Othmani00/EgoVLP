@@ -8,14 +8,14 @@ print("Reorganizing GT Steps Features")
 print("=" * 80)
 
 # 1. Load the task mapping
-with open('visual_features/hiero_step_boundaries.json', 'r') as f:
-    boundaries = json.load(f)
+with open('annotations/annotation_json/complete_step_annotations.json', 'r') as f:
+    annotations = json.load(f)
 
 recording_to_task = {}
 recording_to_label = {}
-for vid_id, info in boundaries.items():
-    recording_to_task[vid_id] = info.get('activity', '').lower().replace(' ', '')
-    recording_to_label[vid_id] = info.get('video_label', -1)
+for vid_id, info in annotations.items():
+    recording_to_task[vid_id] = info.get('activity_name', '').lower().replace(' ', '')
+    recording_to_label[vid_id] = 1 if any(s.get('has_errors', False) for s in info.get('steps', [])) else 0
 
 # 2. Load gt_steps.npz efficiently
 print("\nLoading gt_steps.npz...")

@@ -5,16 +5,16 @@ import os
 import argparse
 
 parser = argparse.ArgumentParser(description="Format visual features for matching.")
-parser.add_argument('--boundaries', type=str, default='visual_features/hiero_step_boundaries.json', help='Path to boundaries json')
+parser.add_argument('--annotations', type=str, default='annotations/annotation_json/complete_step_annotations.json', help='Path to complete annotations json')
 parser.add_argument('--step_metadata', type=str, default='visual_features/best-results-so-far.json', help='Path to step metadata json')
 parser.add_argument('--embeddings', type=str, default='visual_features/best-hiero-embeddings-so-far.npz', help='Path to feature embeddings npz')
 parser.add_argument('--out_npz', type=str, default='visual_features/best_hiero_step_embeddings_256.npz', help='Output npz path')
 parser.add_argument('--out_json', type=str, default='visual_features/best_visual_features_mapping.json', help='Output json path')
 args = parser.parse_args()
 
-print(f"Loading boundaries for task mappings from {args.boundaries}...")
-with open(args.boundaries, 'r') as f:
-    boundaries = json.load(f)
+print(f"Loading annotations for task mappings from {args.annotations}...")
+with open(args.annotations, 'r') as f:
+    annotations = json.load(f)
 
 print(f"Loading step metadata from {args.step_metadata}...")
 with open(args.step_metadata, 'r') as f:
@@ -32,13 +32,13 @@ video_to_label = {}
 video_idx_counter = 0
 
 for rec_id in hiero_emb.files:
-    if rec_id not in boundaries:
-        print(f"Warning: {rec_id} not in boundaries!")
+    if rec_id not in annotations:
+        print(f"Warning: {rec_id} not in annotations!")
         continue
         
-    activity_str = boundaries[rec_id]['activity']
+    activity_str = annotations[rec_id]['activity_name']
     task_name = activity_str.lower().replace(' ', '')
-    label = boundaries[rec_id].get('video_label', 0)
+    label = 1 if any(s.get('has_errors', False) for s in annotations[rec_id].get('steps', [])) else 0
     
     vid_idx = video_idx_counter
     video_idx_counter += 1
