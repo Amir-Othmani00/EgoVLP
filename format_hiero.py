@@ -2,17 +2,26 @@ import numpy as np
 import json
 from collections import defaultdict
 import os
+import argparse
 
-print("Loading boundaries for task mappings...")
-with open('visual_features/hiero_step_boundaries.json', 'r') as f:
+parser = argparse.ArgumentParser(description="Format visual features for matching.")
+parser.add_argument('--boundaries', type=str, default='visual_features/hiero_step_boundaries.json', help='Path to boundaries json')
+parser.add_argument('--step_metadata', type=str, default='visual_features/best-results-so-far.json', help='Path to step metadata json')
+parser.add_argument('--embeddings', type=str, default='visual_features/best-hiero-embeddings-so-far.npz', help='Path to feature embeddings npz')
+parser.add_argument('--out_npz', type=str, default='visual_features/best_hiero_step_embeddings_256.npz', help='Output npz path')
+parser.add_argument('--out_json', type=str, default='visual_features/best_visual_features_mapping.json', help='Output json path')
+args = parser.parse_args()
+
+print(f"Loading boundaries for task mappings from {args.boundaries}...")
+with open(args.boundaries, 'r') as f:
     boundaries = json.load(f)
 
-print("Loading step metadata from best results...")
-with open('visual_features/best-results-so-far.json', 'r') as f:
+print(f"Loading step metadata from {args.step_metadata}...")
+with open(args.step_metadata, 'r') as f:
     best_results = json.load(f)
 
-print("Loading best hiero embeddings...")
-hiero_emb = np.load('visual_features/best-hiero-embeddings-so-far.npz')
+print(f"Loading feature embeddings from {args.embeddings}...")
+hiero_emb = np.load(args.embeddings)
 
 task_to_features = defaultdict(list)
 task_step_metadata = defaultdict(list)
@@ -71,11 +80,11 @@ for task_name, feats_list in task_to_features.items():
     print(f"Task {task_name}: {reorganized_features[task_name].shape[0]} total steps")
 
 # Output files 
-npz_out = 'visual_features/best_hiero_step_embeddings_256.npz'
+npz_out = args.out_npz
 np.savez(npz_out, **reorganized_features)
 print(f"Saved {npz_out}")
 
-json_out = 'visual_features/best_visual_features_mapping.json'
+json_out = args.out_json
 metadata = {
     "video_to_task": video_to_task,
     "video_to_label": video_to_label,
