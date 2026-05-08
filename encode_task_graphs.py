@@ -89,7 +89,7 @@ def main(args):
                         'pretrained': True,
                         'input': 'text'
                     },
-                    'projection_dim': 256,
+                    'projection_dim': args.embedding_dim,
                     'load_checkpoint': args.checkpoint,
                     'projection': 'minimal',
                     'load_temporal_fix': 'zeros'
@@ -110,6 +110,11 @@ def main(args):
                 return self._config[key]
         
         config = SimpleConfig(config_dict)
+
+    try:
+        config['arch']['args']['projection_dim'] = args.embedding_dim
+    except Exception:
+        pass
     
     # Setup device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -211,8 +216,10 @@ if __name__ == '__main__':
                         default='annotations/task_graphs',
                         help='Directory containing task graph JSON files')
     parser.add_argument('--output_dir', type=str, 
-                        default='outputs/task_graph_encodings',
+                        default='outputs/task_graph_encodings_256',
                         help='Directory to save encoded embeddings')
+    parser.add_argument('--embedding_dim', type=int, default=256,
+                        help='Projection dimension for encoded task graph embeddings')
     parser.add_argument('--batch_size', type=int, default=32,
                         help='Batch size for encoding')
     
