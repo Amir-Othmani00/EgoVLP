@@ -10,6 +10,7 @@ from train_fusion import FeatureFusionModule
 
 
 VISUAL_METADATA_CANDIDATES = [
+    'step_annotations.json',
     'gt_features_mapping.json',
     'best_visual_features_mapping.json',
     'hiero_features_mapping.json',
@@ -285,20 +286,22 @@ def main(args):
                 matched_task_indices.append(int(task_idx))
                 matched_visual_indices.append(int(global_visual_idx))
 
+                # By default compute fused embedding if a fusion model is
+                # provided. If legacy output is requested, avoid modifying
+                # saved schema and do not include fused embeddings.
                 fused_embedding = task_emb[task_idx]
-                if fusion_model is not None:
+                if (fusion_model is not None) and (not getattr(args, 'legacy_output', False)):
                     fused_embedding = fuse_pair(
                         fusion_model,
                         task_emb[task_idx],
                         rec_visual_emb[local_visual_idx],
                         device
                     )
-                updated_task_emb[task_idx] = fused_embedding
+                    updated_task_emb[task_idx] = fused_embedding
 
                 pair = {
                     'task_embedding': task_emb[task_idx].tolist(),
                     'visual_embedding': rec_visual_emb[local_visual_idx].tolist(),
-                    'fused_embedding': fused_embedding.tolist(),
                     'task_name': task_name,
                     'task_idx': int(task_idx),
                     'visual_idx': int(global_visual_idx),
@@ -306,6 +309,9 @@ def main(args):
                     'similarity': float(similarity[task_idx, local_visual_idx]),
                     'description': data['descriptions'][task_idx] if task_idx < len(data['descriptions']) else 'N/A'
                 }
+
+                if not getattr(args, 'legacy_output', False):
+                    pair['fused_embedding'] = fused_embedding.tolist()
 
                 if local_visual_idx < len(rec_step_metadata):
                     step_meta = rec_step_metadata[local_visual_idx]
@@ -325,14 +331,19 @@ def main(args):
             }
             task_level_unmatched_task.extend(unmatched_t)
             task_level_unmatched_visual.extend([indices[v] for v in unmatched_v])
-            updated_recording_embeddings[rec_id] = updated_task_emb
-            recording_metadata[rec_id] = {
-                'task_name': task_name,
-                'label': rec_step_metadata[0].get('label', -1) if rec_step_metadata else -1,
-                'matched_task_indices': matched_task_indices,
-                'matched_visual_indices': matched_visual_indices,
-                'num_steps': len(indices),
-            }
+
+            # Only populate updated embeddings and recording metadata when
+            # legacy output is NOT requested. Legacy output keeps the old
+            # schema and avoids writing updated embeddings.
+            if not getattr(args, 'legacy_output', False):
+                updated_recording_embeddings[rec_id] = updated_task_emb
+                recording_metadata[rec_id] = {
+                    'task_name': task_name,
+                    'label': rec_step_metadata[0].get('label', -1) if rec_step_metadata else -1,
+                    'matched_task_indices': matched_task_indices,
+                    'matched_visual_indices': matched_visual_indices,
+                    'num_steps': len(indices),
+                }
 
         all_matches[task_name] = {
             'recordings': task_level_records,
@@ -362,16 +373,17 @@ def main(args):
         json.dump(matched_pairs, f, indent=2)
     print(f"Saved matched pairs to {output_dir / 'matched_pairs.json'}")
 
-    updated_npz_path = output_dir / 'updated_task_graph_embeddings.npz'
-    np.savez_compressed(
-        updated_npz_path,
-        **{recording_id: features for recording_id, features in updated_recording_embeddings.items()}
-    )
-    print(f"Saved updated task graph embeddings to {updated_npz_path}")
+    if not getattr(args, 'legacy_output', False):
+        updated_npz_path = output_dir / 'updated_task_graph_embeddings.npz'
+        np.savez_compressed(
+            updated_npz_path,
+            **{recording_id: features for recording_id, features in updated_recording_embeddings.items()}
+        )
+        print(f"Saved updated task graph embeddings to {updated_npz_path}")
 
-    with open(output_dir / 'recording_metadata.json', 'w') as f:
-        json.dump(recording_metadata, f, indent=2)
-    print(f"Saved recording metadata to {output_dir / 'recording_metadata.json'}")
+        with open(output_dir / 'recording_metadata.json', 'w') as f:
+            json.dump(recording_metadata, f, indent=2)
+        print(f"Saved recording metadata to {output_dir / 'recording_metadata.json'}")
     
     # Save summary statistics
     summary = {
@@ -411,6 +423,8 @@ if __name__ == '__main__':
     parser.add_argument('--visual_metadata', type=str,
                         default='visual_features/hiero_visual_features_mapping.json',
                         help='Path to visual features metadata JSON (optional)')
+    parser.add_argument('--legacy_output', action='store_true',
+                        help='Produce legacy-format outputs (omit fused_embedding and updated embeddings)')
     parser.add_argument('--metadata', type=str,
                         default='outputs/task_graph_encodings_256/task_graph_metadata.json',
                         help='Path to task graph metadata')

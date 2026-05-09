@@ -25,7 +25,8 @@ def load_task_graphs(task_graphs_dir):
             descriptions = []
             for step_id, step_text in steps.items():
                 if step_text not in ['START', 'END']:
-                    descriptions.append(step_text)
+                    # Add #C C prefix as EgoVLP was trained on this
+                    descriptions.append(f"#C C {step_text}")
             
             task_graphs[task_name] = {
                 'descriptions': descriptions,

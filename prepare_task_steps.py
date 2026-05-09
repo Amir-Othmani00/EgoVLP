@@ -30,7 +30,7 @@ def load_annotations(path):
         return json.load(file_handle)
 
 
-def aggregate_hiero_steps(annotations, step_metadata, embeddings):
+def aggregate_hiero_steps(annotations, step_metadata, embeddings, strip_errors=False):
     task_to_features = defaultdict(list)
     task_step_metadata = defaultdict(list)
     task_stats = defaultdict(lambda: {"total_steps": 0, "correct_steps": 0, "incorrect_steps": 0})
@@ -67,8 +67,13 @@ def aggregate_hiero_steps(annotations, step_metadata, embeddings):
                 "recording_id": recording_id,
                 "video_idx": video_idx,
                 "step_idx_in_video": step_idx,
-                "label": label,
             }
+
+            step_meta["label"] = label
+
+            if strip_errors:
+                # Keep the task-level label, but remove explicit error flags.
+                step_meta.pop("has_errors", None)
 
             if step_idx < len(step_info_list):
                 step_meta.update(step_info_list[step_idx])
@@ -96,7 +101,7 @@ def aggregate_hiero_steps(annotations, step_metadata, embeddings):
     return reorganized_features, metadata
 
 
-def aggregate_gt_steps(annotations, gt_data):
+def aggregate_gt_steps(annotations, gt_data, strip_errors=False):
     recording_to_task = {recording_id: normalize_task_name(info.get("activity_name", ""))
                          for recording_id, info in annotations.items()}
     recording_to_label = {recording_id: has_error_step(info.get("steps", []))
@@ -134,17 +139,18 @@ def aggregate_gt_steps(annotations, gt_data):
                 continue
 
             task_features[task_name].append(step_embedding)
-            task_step_metadata[task_name].append(
-                {
-                    "recording_id": recording_id,
-                    "step_idx_in_video": int(step_idx),
-                    "label": recording_to_label.get(recording_id, -1),
-                    "description": str(gt_dict[description_key]) if description_key in files_list else "",
-                    "has_errors": bool(gt_dict[error_key]) if error_key in files_list else False,
-                    "start_time": float(gt_dict[start_key]) if start_key in files_list else -1.0,
-                    "end_time": float(gt_dict[end_key]) if end_key in files_list else -1.0,
-                }
-            )
+            entry = {
+                "recording_id": recording_id,
+                "step_idx_in_video": int(step_idx),
+                "label": recording_to_label.get(recording_id, -1),
+                "description": str(gt_dict[description_key]) if description_key in files_list else "",
+                "start_time": float(gt_dict[start_key]) if start_key in files_list else -1.0,
+                "end_time": float(gt_dict[end_key]) if end_key in files_list else -1.0,
+            }
+            if not strip_errors:
+                entry["has_errors"] = bool(gt_dict[error_key]) if error_key in files_list else False
+
+            task_step_metadata[task_name].append(entry)
 
         all_task_embeddings = {task_name: np.vstack(step_embeddings) for task_name, step_embeddings in task_features.items()}
         metadata = {"task_step_metadata": dict(task_step_metadata)}
@@ -179,17 +185,18 @@ def aggregate_gt_steps(annotations, gt_data):
             desc = ann_steps[step_idx].get('description', '') if step_idx < len(ann_steps) else ''
             has_err = ann_steps[step_idx].get('has_errors', False) if step_idx < len(ann_steps) else False
 
-            task_step_metadata[task_name].append(
-                {
-                    "recording_id": recording_id,
-                    "step_idx_in_video": int(step_idx),
-                    "label": recording_to_label.get(recording_id, -1),
-                    "description": str(desc),
-                    "has_errors": bool(has_err),
-                    "start_time": -1.0,
-                    "end_time": -1.0,
-                }
-            )
+            entry = {
+                "recording_id": recording_id,
+                "step_idx_in_video": int(step_idx),
+                "description": str(desc),
+                "start_time": -1.0,
+                "end_time": -1.0,
+            }
+            entry["label"] = recording_to_label.get(recording_id, -1)
+            if not strip_errors:
+                entry["has_errors"] = bool(has_err)
+
+            task_step_metadata[task_name].append(entry)
 
     all_task_embeddings = {task_name: np.vstack(step_embeddings) for task_name, step_embeddings in task_features.items() if len(step_embeddings)>0}
     metadata = {"task_step_metadata": dict(task_step_metadata)}
@@ -219,6 +226,7 @@ def build_parser():
     parser.add_argument("--gt_steps", type=str, default=None, help="Path to gt_steps.npz (gt mode)")
     parser.add_argument("--out_npz", type=str, default=None, help="Output npz path")
     parser.add_argument("--out_json", type=str, default=None, help="Output json path")
+    parser.add_argument('--strip_errors', action='store_true', help='Omit explicit has_errors fields from produced metadata')
     return parser
 
 
@@ -262,7 +270,7 @@ def main(argv=None):
     print(f"\nLoading {gt_steps_path}...")
 
     gt_data = np.load(gt_steps_path, allow_pickle=True)
-    task_embeddings, metadata = aggregate_gt_steps(annotations, gt_data)
+    task_embeddings, metadata = aggregate_gt_steps(annotations, gt_data, strip_errors=args.strip_errors if hasattr(args, 'strip_errors') else False)
     gt_data.close()
 
     save_outputs(task_embeddings, metadata, out_npz, out_json, compressed=True)

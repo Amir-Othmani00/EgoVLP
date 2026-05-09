@@ -117,8 +117,8 @@ def contrastive_loss(fused_features, task_features, visual_features, temperature
     sim_task = (fused_norm * task_norm).sum(dim=-1) / temperature
     sim_visual = (fused_norm * visual_norm).sum(dim=-1) / temperature
     
-    # Loss: maximize similarity to both inputs
-    loss = -torch.mean(sim_task + sim_visual)
+    # Loss: maximize similarity to both inputs (weighted to prevent collapse)
+    loss = -torch.mean(0.3 * sim_task + 0.7 * sim_visual)
     
     return loss
 
