@@ -16,6 +16,11 @@ DEFAULT_GT_STEPS = "visual_features/gt_steps.npz"
 DEFAULT_GT_OUT_NPZ = "visual_features/gt_steps_reorganized.npz"
 DEFAULT_GT_OUT_JSON = "visual_features/gt_features_mapping.json"
 
+DEFAULT_ACTIONFORMER_METADATA = "visual_features/actionformer_steps.json"
+DEFAULT_ACTIONFORMER_EMBEDDINGS = "visual_features/actionformer_steps.npz"
+DEFAULT_ACTIONFORMER_OUT_NPZ = "visual_features/actionformer_step_embeddings_256.npz"
+DEFAULT_ACTIONFORMER_OUT_JSON = "visual_features/actionformer_visual_features_mapping.json"
+
 
 def normalize_task_name(activity_name):
     return str(activity_name).lower().replace(" ", "")
@@ -204,6 +209,71 @@ def aggregate_gt_steps(annotations, gt_data, strip_errors=False):
     return all_task_embeddings, metadata
 
 
+def aggregate_actionformer_steps(annotations, step_metadata, embeddings, strip_errors=False):
+    recording_to_task = {recording_id: normalize_task_name(info.get("activity_name", ""))
+                         for recording_id, info in annotations.items()}
+    recording_to_label = {recording_id: has_error_step(info.get("steps", []))
+                          for recording_id, info in annotations.items()}
+
+    task_features = defaultdict(list)
+    task_step_metadata = defaultdict(list)
+
+    files_list = list(embeddings.files)
+
+    for recording_key in files_list:
+        recording_id = str(recording_key)
+
+        if recording_id not in recording_to_task:
+            # skip recordings not present in annotations
+            continue
+
+        features = embeddings[recording_key]
+        # each row corresponds to a step embedding
+        num_steps = features.shape[0]
+
+        # Get step metadata from JSON
+        step_info_list = step_metadata.get(recording_id, {}).get("steps", [])
+
+        for step_idx in range(num_steps):
+            step_embedding = features[step_idx]
+            task_name = recording_to_task.get(recording_id)
+            if not task_name:
+                continue
+
+            task_features[task_name].append(step_embedding)
+
+            # Build metadata entry for this step
+            entry = {
+                "recording_id": recording_id,
+                "step_idx_in_video": int(step_idx),
+            }
+            entry["label"] = recording_to_label.get(recording_id, -1)
+
+            # Add step-specific information from actionformer metadata
+            if step_idx < len(step_info_list):
+                step_info = step_info_list[step_idx]
+                entry["step_id"] = step_info.get("step_id", -1)
+                entry["start_time"] = float(step_info.get("start_time", -1.0))
+                entry["end_time"] = float(step_info.get("end_time", -1.0))
+            else:
+                entry["step_id"] = -1
+                entry["start_time"] = -1.0
+                entry["end_time"] = -1.0
+
+            if not strip_errors:
+                # Try to pull has_errors from annotations if available
+                ann_steps = annotations.get(recording_id, {}).get('steps', [])
+                has_err = ann_steps[step_idx].get('has_errors', False) if step_idx < len(ann_steps) else False
+                entry["has_errors"] = bool(has_err)
+
+            task_step_metadata[task_name].append(entry)
+
+    all_task_embeddings = {task_name: np.vstack(step_embeddings) for task_name, step_embeddings in task_features.items() if len(step_embeddings) > 0}
+    metadata = {"task_step_metadata": dict(task_step_metadata)}
+
+    return all_task_embeddings, metadata
+
+
 def save_outputs(embeddings_by_task, metadata, out_npz, out_json, compressed=False):
     output_path = Path(out_npz)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -219,10 +289,10 @@ def save_outputs(embeddings_by_task, metadata, out_npz, out_json, compressed=Fal
 
 def build_parser():
     parser = argparse.ArgumentParser(description="Reorganize task-step features from different input formats.")
-    parser.add_argument("--source", choices=["hiero", "gt"], default="hiero", help="Input format to reorganize")
+    parser.add_argument("--source", choices=["hiero", "gt", "actionformer"], default="hiero", help="Input format to reorganize")
     parser.add_argument("--annotations", type=str, default=None, help="Path to complete annotations json")
-    parser.add_argument("--step_metadata", type=str, default=None, help="Path to step metadata json (hiero mode)")
-    parser.add_argument("--embeddings", type=str, default=None, help="Path to feature embeddings npz (hiero mode)")
+    parser.add_argument("--step_metadata", type=str, default=None, help="Path to step metadata json (hiero/actionformer mode)")
+    parser.add_argument("--embeddings", type=str, default=None, help="Path to feature embeddings npz (hiero/actionformer mode)")
     parser.add_argument("--gt_steps", type=str, default=None, help="Path to gt_steps.npz (gt mode)")
     parser.add_argument("--out_npz", type=str, default=None, help="Output npz path")
     parser.add_argument("--out_json", type=str, default=None, help="Output json path")
@@ -258,6 +328,31 @@ def main(argv=None):
         print(f"Saved {out_npz}")
         print(f"Saved {out_json}")
         print("Done grouping embeddings by task.")
+        return
+
+    if args.source == "actionformer":
+        step_metadata_path = args.step_metadata or DEFAULT_ACTIONFORMER_METADATA
+        embeddings_path = args.embeddings or DEFAULT_ACTIONFORMER_EMBEDDINGS
+        out_npz = args.out_npz or DEFAULT_ACTIONFORMER_OUT_NPZ
+        out_json = args.out_json or DEFAULT_ACTIONFORMER_OUT_JSON
+
+        print(f"Loading annotations for task mappings from {annotations_path}...")
+        print(f"Loading step metadata from {step_metadata_path}...")
+        with open(step_metadata_path, "r") as file_handle:
+            step_metadata = json.load(file_handle)
+
+        print(f"Loading feature embeddings from {embeddings_path}...")
+        embeddings = np.load(embeddings_path)
+
+        task_embeddings, metadata = aggregate_actionformer_steps(annotations, step_metadata, embeddings, strip_errors=args.strip_errors)
+
+        for task_name, task_features in task_embeddings.items():
+            print(f"Task {task_name}: {task_features.shape[0]} total steps")
+
+        save_outputs(task_embeddings, metadata, out_npz, out_json, compressed=True)
+        print(f"Saved {out_npz}")
+        print(f"Saved {out_json}")
+        print("Done grouping actionformer embeddings by task.")
         return
 
     gt_steps_path = args.gt_steps or DEFAULT_GT_STEPS
