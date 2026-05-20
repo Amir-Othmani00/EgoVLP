@@ -12,7 +12,7 @@ DEFAULT_HIERO_EMBEDDINGS = "visual_features/hiero_embeddings.npz"
 DEFAULT_HIERO_OUT_NPZ = "visual_features/hiero_step_embeddings_256.npz"
 DEFAULT_HIERO_OUT_JSON = "visual_features/hiero_visual_features_mapping.json"
 
-DEFAULT_GT_STEPS = "visual_features/gt_steps.npz"
+DEFAULT_GT_STEPS = "visual_features/gt-steps.npz"
 DEFAULT_GT_OUT_NPZ = "visual_features/gt_steps_reorganized.npz"
 DEFAULT_GT_OUT_JSON = "visual_features/gt_features_mapping.json"
 
@@ -119,7 +119,7 @@ def aggregate_gt_steps(annotations, gt_data, strip_errors=False):
     # 2) Per-recording keys where each key is a recording_id and value is (num_steps, dim)
     if any(name.startswith("step_") for name in files_list):
         # existing behavior
-        step_indices = sorted({name.split("_")[1] for name in files_list if name.startswith("step_")})
+        step_indices = sorted({name.split("_")[1] for name in files_list if name.startswith("step_")}, key=int)
         gt_dict = {key: gt_data[key] for key in files_list}
         task_features = defaultdict(list)
         task_step_metadata = defaultdict(list)
@@ -144,11 +144,22 @@ def aggregate_gt_steps(annotations, gt_data, strip_errors=False):
                 continue
 
             task_features[task_name].append(step_embedding)
+            
+            # Try to find step_id from annotations if description matches
+            desc = str(gt_dict[description_key]) if description_key in files_list else ""
+            ann_steps = annotations.get(recording_id, {}).get('steps', [])
+            step_id = -1
+            for ann_step in ann_steps:
+                if ann_step.get('description', '') == desc:
+                    step_id = ann_step.get('step_id', -1)
+                    break
+
             entry = {
                 "recording_id": recording_id,
                 "step_idx_in_video": int(step_idx),
+                "step_id": int(step_id),
                 "label": recording_to_label.get(recording_id, -1),
-                "description": str(gt_dict[description_key]) if description_key in files_list else "",
+                "description": desc,
                 "start_time": float(gt_dict[start_key]) if start_key in files_list else -1.0,
                 "end_time": float(gt_dict[end_key]) if end_key in files_list else -1.0,
             }
@@ -178,6 +189,11 @@ def aggregate_gt_steps(annotations, gt_data, strip_errors=False):
         features = gt_data[recording_key]
         # each row corresponds to a step embedding
         num_steps = features.shape[0]
+        ann_steps = annotations.get(recording_id, {}).get('steps', [])
+        
+        if len(ann_steps) != num_steps:
+            print(f"Warning: Recording {recording_id} has {num_steps} steps in GT features but {len(ann_steps)} in annotations.")
+
         for step_idx in range(num_steps):
             step_embedding = features[step_idx]
             task_name = recording_to_task.get(recording_id)
@@ -185,20 +201,32 @@ def aggregate_gt_steps(annotations, gt_data, strip_errors=False):
                 continue
 
             task_features[task_name].append(step_embedding)
-            # Try to pull description/has_errors from annotations if available
-            ann_steps = annotations.get(recording_id, {}).get('steps', [])
-            desc = ann_steps[step_idx].get('description', '') if step_idx < len(ann_steps) else ''
-            has_err = ann_steps[step_idx].get('has_errors', False) if step_idx < len(ann_steps) else False
+            
+            # Pull metadata from annotations
+            if step_idx < len(ann_steps):
+                step_info = ann_steps[step_idx]
+                step_id = step_info.get('step_id', -1)
+                desc = step_info.get('description', '')
+                start_time = step_info.get('start_time', -1.0)
+                end_time = step_info.get('end_time', -1.0)
+                has_err = step_info.get('has_errors', False)
+            else:
+                step_id = -1
+                desc = ""
+                start_time = -1.0
+                end_time = -1.0
+                has_err = False
 
             entry = {
                 "recording_id": recording_id,
                 "step_idx_in_video": int(step_idx),
+                "step_id": int(step_id),
                 "description": str(desc),
-                "start_time": -1.0,
-                "end_time": -1.0,
+                "start_time": float(start_time),
+                "end_time": float(end_time),
             }
-            entry["label"] = recording_to_label.get(recording_id, -1)
             if not strip_errors:
+                entry["label"] = recording_to_label.get(recording_id, -1)
                 entry["has_errors"] = bool(has_err)
 
             task_step_metadata[task_name].append(entry)
