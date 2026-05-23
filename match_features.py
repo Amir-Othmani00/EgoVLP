@@ -315,7 +315,6 @@ def main(args):
 
                 if local_visual_idx < len(rec_step_metadata):
                     step_meta = rec_step_metadata[local_visual_idx]
-                    pair['video_label'] = step_meta.get('label', -1)
                     pair['video_idx'] = step_meta.get('video_idx', -1)
                     pair['step_idx_in_video'] = step_meta.get('step_idx_in_video', -1)
 
@@ -339,7 +338,6 @@ def main(args):
                 updated_recording_embeddings[rec_id] = updated_task_emb
                 recording_metadata[rec_id] = {
                     'task_name': task_name,
-                    'label': rec_step_metadata[0].get('label', -1) if rec_step_metadata else -1,
                     'matched_task_indices': matched_task_indices,
                     'matched_visual_indices': matched_visual_indices,
                     'num_steps': len(indices),
