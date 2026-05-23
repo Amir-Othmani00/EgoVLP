@@ -48,8 +48,9 @@ def normalize_task_name(activity_name):
 Converts activity names from annotations into consistent task identifiers (e.g., "Making Tea" → "makingtea")
 
 #### Error Labeling
-- Extracts binary labels from annotations: whether a recording contains erroneous steps
+- **By default: Error labels are EXCLUDED** from the output metadata
 - `has_error_step()` returns 1 if any step in a video has errors, 0 otherwise
+- To include error labels, pass the `--include_errors` flag
 
 ### Supported Input Formats
 
@@ -96,10 +97,10 @@ Output: reorganized_features (dict of task → embeddings), metadata (recording 
 Steps:
 1. Iterate through all recordings in embeddings
 2. Look up task name from annotations using recording_id
-3. Determine if recording has errors (video-level label)
+3. Determine if recording has errors (video-level label) - computed but excluded by default
 4. Extract step embeddings and metadata
 5. Concatenate all recordings for each task
-6. Return task→embeddings mapping + metadata
+6. Return task→embeddings mapping + metadata (error labels excluded by default)
 ```
 
 ### Output Format
@@ -113,14 +114,12 @@ Steps:
   ```json
   {
     "video_to_task": {"0": "makingtea", "1": "makingtea", ...},
-    "video_to_label": {"0": 0, "1": 1, ...},  // 0 = correct, 1 = has errors
     "task_step_metadata": {
       "makingtea": [
         {
           "recording_id": "ego_video_001",
           "video_idx": 0,
           "step_idx_in_video": 0,
-          "label": 0,
           "step_id": 5,
           ...
         },
@@ -136,9 +135,12 @@ Steps:
     }
   }
   ```
+  
+  **Note:** Error labels (`video_to_label`, `label`, `has_errors`) are excluded by default. To include them, pass `--include_errors` flag.
 
 ### Usage Example
 ```bash
+# Default: error labels are EXCLUDED from metadata
 python prepare_task_steps.py \
   --source hiero \
   --annotations annotations/annotation_json/complete_step_annotations.json \
@@ -146,6 +148,16 @@ python prepare_task_steps.py \
   --embeddings visual_features/hiero_embeddings.npz \
   --out_npz visual_features/hiero_step_embeddings_256.npz \
   --out_json visual_features/hiero_visual_features_mapping.json
+
+# To include error labels: add --include_errors flag
+python prepare_task_steps.py \
+  --source hiero \
+  --annotations annotations/annotation_json/complete_step_annotations.json \
+  --step_metadata visual_features/hiero_results.json \
+  --embeddings visual_features/hiero_embeddings.npz \
+  --out_npz visual_features/hiero_step_embeddings_256.npz \
+  --out_json visual_features/hiero_visual_features_mapping.json \
+  --include_errors
 ```
 
 ---
@@ -631,7 +643,7 @@ graph LR
 
 #### Phase 1: Feature Preparation (Script 1)
 ```bash
-# For HIERO features
+# For HIERO features (error labels excluded by default)
 python prepare_task_steps.py \
   --source hiero \
   --annotations annotations/annotation_json/complete_step_annotations.json \
@@ -639,9 +651,11 @@ python prepare_task_steps.py \
   --embeddings visual_features/hiero_embeddings.npz \
   --out_npz visual_features/hiero_step_embeddings_256.npz \
   --out_json visual_features/hiero_visual_features_mapping.json
+
+# Add --include_errors to include error labels in metadata
 ```
 
-**Output:** Task-organized embeddings and metadata
+**Output:** Task-organized embeddings and metadata (without error labels by default)
 
 #### Phase 2: Task Graph Encoding (Script 2)
 ```bash
@@ -715,6 +729,7 @@ This generates fused embeddings that can be used for:
 3. **Missing Metadata**: Verify visual_features_mapping.json exists before matching
 4. **Batch Size**: Reduce if GPU OOM errors during fusion training
 5. **Temperature Tuning**: Too small → numerical issues; too large → weak learning signal
+6. **Error Labels**: By default, `prepare_task_steps.py` excludes error labels. Use `--include_errors` flag to include them
 
 ### Performance Considerations
 

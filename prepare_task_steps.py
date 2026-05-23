@@ -324,7 +324,7 @@ def build_parser():
     parser.add_argument("--gt_steps", type=str, default=None, help="Path to gt_steps.npz (gt mode)")
     parser.add_argument("--out_npz", type=str, default=None, help="Output npz path")
     parser.add_argument("--out_json", type=str, default=None, help="Output json path")
-    parser.add_argument('--strip_errors', action='store_true', help='Omit explicit has_errors fields from produced metadata')
+    parser.add_argument('--include_errors', action='store_true', help='Include explicit has_errors fields in produced metadata')
     return parser
 
 
@@ -372,7 +372,7 @@ def main(argv=None):
         print(f"Loading feature embeddings from {embeddings_path}...")
         embeddings = np.load(embeddings_path)
 
-        task_embeddings, metadata = aggregate_actionformer_steps(annotations, step_metadata, embeddings, strip_errors=args.strip_errors)
+        task_embeddings, metadata = aggregate_actionformer_steps(annotations, step_metadata, embeddings, strip_errors=not args.include_errors)
 
         for task_name, task_features in task_embeddings.items():
             print(f"Task {task_name}: {task_features.shape[0]} total steps")
@@ -393,7 +393,7 @@ def main(argv=None):
     print(f"\nLoading {gt_steps_path}...")
 
     gt_data = np.load(gt_steps_path, allow_pickle=True)
-    task_embeddings, metadata = aggregate_gt_steps(annotations, gt_data, strip_errors=args.strip_errors if hasattr(args, 'strip_errors') else False)
+    task_embeddings, metadata = aggregate_gt_steps(annotations, gt_data, strip_errors=not args.include_errors)
     gt_data.close()
 
     save_outputs(task_embeddings, metadata, out_npz, out_json, compressed=True)
